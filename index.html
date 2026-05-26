@@ -1,456 +1,577 @@
-// ============================================================
-//   YOUTUBE SHORTS FACTORY — MAIN ENGINE
-//   Handles all clients automatically
-// ============================================================
-
-
-function masterSetup() {
-  Logger.log("Setting up YouTube Shorts Factory...");
-  setupMasterSheet();
-  setupAllTriggers();
-  Logger.log("Setup complete! System is live.");
-}
-
-function addNewClient() {
-  var client = CLIENTS[CLIENTS.length - 1];
-  Logger.log("Adding client: " + client.name);
-  setupClientSheet(client);
-  updateMasterSheet(client, "ACTIVE");
-  Logger.log("Client " + client.name + " is ready!");
-}
-
-function pauseClient(clientId) {
-  var client = getClientById(clientId);
-  if (!client) { Logger.log("Client not found: " + clientId); return; }
-  updateMasterSheet(client, "PAUSED");
-  Logger.log("Paused: " + client.name);
-}
-
-function resumeClient(clientId) {
-  var client = getClientById(clientId);
-  if (!client) { Logger.log("Client not found: " + clientId); return; }
-  updateMasterSheet(client, "ACTIVE");
-  Logger.log("Resumed: " + client.name);
-}
-
-function runAllClients() {
-  Logger.log("Daily run started...");
-  var now = new Date();
-  var utcHour = now.getUTCHours();
-
-  CLIENTS.forEach(function(client) {
-    if (!client.active) {
-      Logger.log("Skipping paused client: " + client.name);
-      return;
-    }
-    var schedule = getClientSchedule(client);
-    if (schedule.indexOf(utcHour) === -1) {
-      Logger.log("Not upload time for: " + client.name);
-      return;
-    }
-    Logger.log("Processing client: " + client.name);
-    try {
-      processClient(client);
-    } catch (e) {
-      Logger.log("Error for " + client.name + ": " + e.message);
-      sendErrorAlert(client, e.message);
-    }
-  });
-
-  Logger.log("Daily run complete.");
-}
-
-function processClient(client) {
-  Logger.log("Processing: " + client.name + " | " + client.niche + " | " + client.language);
-
-  var topic = generateTopic(client);
-  Logger.log("Topic: " + topic);
-
-  var script = generateScript(client, topic);
-  Logger.log("Script generated: " + script.title);
-
-  var images = fetchImages(topic, client.language);
-  Logger.log("Images found: " + images.length);
-
-  var audioUrl = generateVoiceover(script.narration, client);
-  Logger.log("Voiceover generated.");
-
-  var videoUrl = assembleVideo(client, script, images, audioUrl);
-  Logger.log("Video assembled: " + videoUrl);
-
-  var videoId = uploadToYouTube(client, script, videoUrl);
-  Logger.log("Uploaded! Video ID: " + videoId);
-
-  logToClientSheet(client, topic, script.title, videoId);
-  Logger.log("Done for " + client.name);
-}
-
-function generateTopic(client) {
-  var usedTopics = getUsedTopics(client);
-  var nicheSettings = NICHE_SETTINGS[client.niche] || NICHE_SETTINGS["Facts and Mysteries"];
-
-  var prompt = "You are a YouTube Shorts content strategist.\n\n" +
-    "Generate ONE fresh, trending, engaging topic for a " + client.niche + " channel in " + client.language + ".\n\n" +
-    "Rules:\n" +
-    "- Must be specific, not vague\n" +
-    "- Must be suitable for a 50-second short video\n" +
-    "- Must be genuinely interesting and shareable\n" +
-    "- MUST NOT be any of these already used topics: " + usedTopics.join(", ") + "\n\n" +
-    "Respond with ONLY the topic in one line, no explanation.";
-
-  return callGemini(prompt, 100);
-}
-
-function generateScript(client, topic) {
-  var nicheSettings = NICHE_SETTINGS[client.niche] || NICHE_SETTINGS["Facts and Mysteries"];
-  var hook = nicheSettings.hooks[Math.floor(Math.random() * nicheSettings.hooks.length)];
-  var duration = nicheSettings.duration;
-
-  var prompt = "You are an expert YouTube Shorts scriptwriter.\n\n" +
-    "Write a complete script for a " + duration + "-second " + client.language + " YouTube Short.\n\n" +
-    "Topic: " + topic + "\n" +
-    "Channel: " + client.channelName + "\n" +
-    "Style: " + nicheSettings.style + "\n" +
-    "Hook to use: " + hook + "\n\n" +
-    "Script structure:\n" +
-    "1. HOOK (0-3 seconds): Start with hook phrase, make it irresistible\n" +
-    "2. STORY (3-45 seconds): Build tension, share facts, keep viewer hooked\n" +
-    "3. TWIST (45-50 seconds): Surprising ending or mind-blowing conclusion\n" +
-    "4. CTA (last 3 seconds): Follow karo aur aisi aur videos ke liye\n\n" +
-    "Rules:\n" +
-    "- Write ONLY in " + client.language + "\n" +
-    "- Short sentences, high energy\n" +
-    "- No filler words\n" +
-    "- Must keep viewer watching till end\n\n" +
-    "Respond in JSON only, no markdown:\n" +
-    "{\"title\": \"catchy youtube title under 60 chars with 1 emoji\", " +
-    "\"description\": \"2 sentence description + hashtags\", " +
-    "\"narration\": \"complete script text for voiceover\", " +
-    "\"imageKeywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"]}";
-
-  var response = callGemini(prompt, 1500);
-
-  try {
-    var cleaned = response.replace(/```json/gi, "").replace(/```/g, "").trim();
-    var jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    Logger.log("Script parse error: " + e.message);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YT Shorts Factory — Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/tabler-icons.min.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
+  .topbar { background: #fff; border-bottom: 1px solid #e5e5e5; padding: 0 2rem; height: 56px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 50; }
+  .topbar-brand { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .topbar-brand .yt-icon { color: #ff0000; font-size: 20px; }
+  .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 2rem; }
+  .stat { background: #fff; border-radius: 10px; border: 1px solid #e5e5e5; padding: 1rem 1.25rem; }
+  .stat-label { font-size: 12px; color: #666; margin-bottom: 4px; }
+  .stat-value { font-size: 24px; font-weight: 600; color: #1a1a1a; }
+  .card { background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; padding: 1.5rem; margin-bottom: 1.5rem; }
+  .card-title { font-size: 14px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1.25rem; }
+  .tabs { display: flex; gap: 4px; background: #f0f0f0; border-radius: 10px; padding: 4px; margin-bottom: 1.5rem; }
+  .tab { flex: 1; text-align: center; padding: 8px 12px; border-radius: 8px; border: none; background: none; cursor: pointer; font-size: 13px; font-weight: 500; color: #666; transition: all 0.15s; }
+  .tab.active { background: #fff; color: #1a1a1a; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .tab i { margin-right: 4px; }
+  .section { display: none; }
+  .section.active { display: block; }
+  .client-card { background: #fff; border: 1px solid #e5e5e5; border-radius: 12px; padding: 1.25rem; margin-bottom: 12px; transition: box-shadow 0.15s; }
+  .client-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .client-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .client-name { font-size: 15px; font-weight: 600; color: #1a1a1a; }
+  .client-channel { font-size: 12px; color: #666; margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+  .badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; }
+  .badge-active { background: #dcfce7; color: #16a34a; }
+  .badge-paused { background: #fef9c3; color: #ca8a04; }
+  .client-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+  .meta-item .meta-label { font-size: 11px; color: #999; margin-bottom: 2px; }
+  .meta-item .meta-value { font-size: 13px; font-weight: 500; color: #1a1a1a; }
+  .client-actions { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid #f0f0f0; }
+  .btn { font-size: 12px; padding: 6px 14px; border-radius: 8px; border: 1px solid #e5e5e5; background: #fff; cursor: pointer; color: #1a1a1a; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; transition: all 0.15s; }
+  .btn:hover { background: #f5f5f5; border-color: #d0d0d0; }
+  .btn-primary { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+  .btn-primary:hover { background: #333; border-color: #333; }
+  .btn-danger { color: #dc2626; border-color: #fecaca; }
+  .btn-danger:hover { background: #fef2f2; }
+  .btn-warning { color: #ca8a04; border-color: #fde68a; }
+  .btn-warning:hover { background: #fefce8; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-group { display: flex; flex-direction: column; gap: 5px; }
+  .form-group.full { grid-column: 1 / -1; }
+  .form-group label { font-size: 12px; color: #555; font-weight: 600; }
+  .form-group input, .form-group select {
+    font-size: 13px; padding: 8px 12px; border: 1px solid #e5e5e5;
+    border-radius: 8px; background: #fff; color: #1a1a1a; outline: none;
+    transition: border-color 0.15s;
   }
+  .form-group input:focus, .form-group select:focus { border-color: #1a1a1a; }
+  .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 1.25rem; }
+  .empty-state { text-align: center; padding: 4rem 1rem; color: #999; }
+  .empty-state i { font-size: 40px; display: block; margin-bottom: 1rem; opacity: 0.3; }
+  .empty-state p { font-size: 15px; margin-bottom: 0.5rem; color: #555; }
+  .empty-state span { font-size: 13px; }
+  .alert { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; }
+  .alert-success { background: #dcfce7; color: #16a34a; }
+  .alert-error { background: #fef2f2; color: #dc2626; }
+  .alert-info { background: #eff6ff; color: #2563eb; }
+  .code-box { background: #1a1a1a; color: #e5e5e5; border-radius: 10px; padding: 1.25rem; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.6; max-height: 360px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; position: relative; margin-top: 1rem; }
+  .copy-btn { position: absolute; top: 10px; right: 10px; font-size: 11px; padding: 4px 10px; border: 1px solid #444; background: #333; border-radius: 6px; cursor: pointer; color: #ccc; }
+  .copy-btn:hover { background: #444; color: #fff; }
+  .step { display: flex; gap: 12px; margin-bottom: 14px; align-items: flex-start; }
+  .step-num { width: 26px; height: 26px; border-radius: 50%; background: #1a1a1a; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .step-text { font-size: 14px; color: #1a1a1a; padding-top: 3px; }
+  .step-text span { color: #666; display: block; font-size: 12px; margin-top: 3px; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; padding: 1rem; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: #fff; border-radius: 14px; padding: 1.5rem; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+  .modal-title { font-size: 16px; font-weight: 600; }
+  .modal-close { background: none; border: none; cursor: pointer; color: #666; font-size: 20px; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+  .modal-close:hover { background: #f5f5f5; }
+  .section-divider { height: 1px; background: #f0f0f0; margin: 1.5rem 0; }
+  @media (max-width: 600px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .form-grid { grid-template-columns: 1fr; }
+    .form-group.full { grid-column: 1; }
+    .client-meta { grid-template-columns: repeat(2, 1fr); }
+    .container { padding: 1rem; }
+    .tabs { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
 
-  return {
-    title: topic + " 😱",
-    description: "Jaaniye is amazing topic ke baare mein! #Shorts #Hindi #Facts",
-    narration: topic + " ke baare mein aaj hum jaanenge kuch aisa jo aapne kabhi nahi suna.",
-    imageKeywords: ["mystery", "india", "facts", "amazing", "world"]
+<div class="topbar">
+  <div class="topbar-brand">
+    <i class="ti ti-brand-youtube yt-icon"></i>
+    YT Shorts Factory
+  </div>
+  <button class="btn btn-primary" onclick="showTab('add')">
+    <i class="ti ti-plus"></i> Add client
+  </button>
+</div>
+
+<div class="container">
+
+  <!-- STATS -->
+  <div class="stats">
+    <div class="stat"><div class="stat-label">Total clients</div><div class="stat-value" id="stat-total">0</div></div>
+    <div class="stat"><div class="stat-label">Active</div><div class="stat-value" id="stat-active" style="color:#16a34a">0</div></div>
+    <div class="stat"><div class="stat-label">Paused</div><div class="stat-value" id="stat-paused" style="color:#ca8a04">0</div></div>
+    <div class="stat"><div class="stat-label">Videos/day</div><div class="stat-value" id="stat-videos">0</div></div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('clients')"><i class="ti ti-users"></i> Clients</button>
+    <button class="tab" onclick="showTab('add')"><i class="ti ti-plus"></i> Add client</button>
+    <button class="tab" onclick="showTab('config')"><i class="ti ti-code"></i> Config</button>
+    <button class="tab" onclick="showTab('guide')"><i class="ti ti-book"></i> Guide</button>
+  </div>
+
+  <!-- CLIENTS TAB -->
+  <div class="section active" id="tab-clients">
+    <div id="clients-list"></div>
+  </div>
+
+  <!-- ADD CLIENT TAB -->
+  <div class="section" id="tab-add">
+    <div id="form-alert"></div>
+    <div class="card">
+      <div class="card-title"><i class="ti ti-user"></i> Client details</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Client name</label>
+          <input type="text" id="f-name" placeholder="e.g. Rahul Sharma">
+        </div>
+        <div class="form-group">
+          <label>YouTube channel name</label>
+          <input type="text" id="f-channel" placeholder="e.g. Rahasya Hindi">
+        </div>
+        <div class="form-group">
+          <label>Niche</label>
+          <select id="f-niche">
+            <option value="Facts and Mysteries">Facts and Mysteries</option>
+            <option value="Horror Stories">Horror Stories</option>
+            <option value="Motivational">Motivational</option>
+            <option value="Finance Tips">Finance Tips</option>
+            <option value="Science Facts">Science Facts</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Language</label>
+          <select id="f-language">
+            <option value="Hindi">Hindi</option>
+            <option value="English">English</option>
+            <option value="Hinglish">Hinglish</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Voice gender</label>
+          <select id="f-voice">
+            <option value="FEMALE">Female</option>
+            <option value="MALE">Male</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Videos per day</label>
+          <select id="f-vpd">
+            <option value="1">1 video/day</option>
+            <option value="2" selected>2 videos/day</option>
+            <option value="3">3 videos/day</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Start date</label>
+          <input type="date" id="f-startdate">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="f-status">
+            <option value="true">Active</option>
+            <option value="false">Paused</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>Client Google Sheet ID <span style="font-weight:400;color:#999">(from sheet URL)</span></label>
+          <input type="text" id="f-sheetid" placeholder="1ABC123xyz...">
+        </div>
+        <div class="form-group full">
+          <label>Client Drive Folder ID <span style="font-weight:400;color:#999">(from folder URL)</span></label>
+          <input type="text" id="f-folderid" placeholder="1ABC123xyz...">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="clearForm()"><i class="ti ti-x"></i> Clear</button>
+        <button class="btn btn-primary" onclick="addClient()"><i class="ti ti-plus"></i> Add client</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONFIG TAB -->
+  <div class="section" id="tab-config">
+    <div class="alert alert-info">
+      <i class="ti ti-info-circle"></i> Fill in your credentials below and click Generate to get the complete config.gs ready to paste in Apps Script.
+    </div>
+    <div class="card">
+      <div class="card-title"><i class="ti ti-key"></i> Agency credentials</div>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Gemini API key</label>
+          <input type="text" id="cfg-gemini" placeholder="AIzaSy...">
+        </div>
+        <div class="form-group full">
+          <label>Pexels API key</label>
+          <input type="text" id="cfg-pexels" placeholder="your pexels key">
+        </div>
+        <div class="form-group full">
+          <label>Cloud Run URL</label>
+          <input type="text" id="cfg-cloudrun" value="https://yt-factory-348480509231.europe-west1.run.app">
+        </div>
+        <div class="form-group full">
+          <label>Your email (for error alerts)</label>
+          <input type="text" id="cfg-email" placeholder="you@gmail.com">
+        </div>
+        <div class="form-group full">
+          <label>Master Sheet ID</label>
+          <input type="text" id="cfg-mastersheet" placeholder="1ABC123xyz...">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="generateConfig()"><i class="ti ti-code"></i> Generate config.gs</button>
+      </div>
+      <div id="config-output"></div>
+    </div>
+  </div>
+
+  <!-- GUIDE TAB -->
+  <div class="section" id="tab-guide">
+    <div class="card">
+      <div class="card-title"><i class="ti ti-list-check"></i> How to add a new client</div>
+      <div class="step"><div class="step-num">1</div><div class="step-text">Create a Google Sheet for client<span>sheets.google.com → New blank sheet → Copy ID from URL between /d/ and /edit</span></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-text">Create a Drive folder for client<span>drive.google.com → New folder → Open folder → Copy ID from URL</span></div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-text">Fill in the Add client form<span>Enter all client details and paste both IDs</span></div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-text">Go to Config tab → Generate config.gs<span>Fill agency credentials → Click Generate → Copy the code</span></div></div>
+      <div class="step"><div class="step-num">5</div><div class="step-text">Paste in Apps Script config.gs file<span>Open Apps Script → Click config.gs → Select all → Paste → Save</span></div></div>
+      <div class="step"><div class="step-num">6</div><div class="step-text">Run addNewClient() in Apps Script<span>Selects last client in list → Sets up their sheet → Adds to master tracker</span></div></div>
+      <div class="step"><div class="step-num">7</div><div class="step-text">Run masterSetup() if first client<span>Only needed once — sets up master sheet and all triggers</span></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="ti ti-clock"></i> Auto phase schedule</div>
+      <div class="step">
+        <div class="step-num" style="background:#16a34a">1</div>
+        <div class="step-text">Day 1–13: full speed<span>Uploads at client's set videos/day — 8AM, 2PM, 8PM IST</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num" style="background:#ca8a04">2</div>
+        <div class="step-text">Day 14–27: 2 videos/day<span>Auto switches at midnight IST — no manual action needed</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num" style="background:#2563eb">3</div>
+        <div class="step-text">Day 28+: 1 video/day<span>Sustainable long term posting — runs forever automatically</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><i class="ti ti-currency-rupee"></i> Pricing suggestion</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div style="border:1px solid #e5e5e5;border-radius:10px;padding:1rem;text-align:center">
+          <div style="font-size:12px;color:#666;margin-bottom:6px">Starter</div>
+          <div style="font-size:20px;font-weight:700">₹8,000</div>
+          <div style="font-size:11px;color:#999;margin-top:4px">Setup + 30 days</div>
+          <div style="font-size:12px;color:#16a34a;margin-top:6px">+ ₹3,000/month</div>
+        </div>
+        <div style="border:2px solid #1a1a1a;border-radius:10px;padding:1rem;text-align:center;position:relative">
+          <div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:#1a1a1a;color:#fff;font-size:10px;padding:2px 10px;border-radius:20px;font-weight:600">POPULAR</div>
+          <div style="font-size:12px;color:#666;margin-bottom:6px">Growth</div>
+          <div style="font-size:20px;font-weight:700">₹15,000</div>
+          <div style="font-size:11px;color:#999;margin-top:4px">Setup + 90 days</div>
+          <div style="font-size:12px;color:#16a34a;margin-top:6px">+ ₹5,000/month</div>
+        </div>
+        <div style="border:1px solid #e5e5e5;border-radius:10px;padding:1rem;text-align:center">
+          <div style="font-size:12px;color:#666;margin-bottom:6px">Empire</div>
+          <div style="font-size:20px;font-weight:700">₹25,000</div>
+          <div style="font-size:11px;color:#999;margin-top:4px">3 channels setup</div>
+          <div style="font-size:12px;color:#16a34a;margin-top:6px">+ ₹8,000/month</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Edit client</div>
+      <button class="modal-close" onclick="closeModal()"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="form-grid">
+      <input type="hidden" id="edit-idx">
+      <div class="form-group"><label>Client name</label><input type="text" id="e-name"></div>
+      <div class="form-group"><label>Channel name</label><input type="text" id="e-channel"></div>
+      <div class="form-group"><label>Niche</label>
+        <select id="e-niche">
+          <option value="Facts and Mysteries">Facts and Mysteries</option>
+          <option value="Horror Stories">Horror Stories</option>
+          <option value="Motivational">Motivational</option>
+          <option value="Finance Tips">Finance Tips</option>
+          <option value="Science Facts">Science Facts</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Language</label>
+        <select id="e-language">
+          <option value="Hindi">Hindi</option>
+          <option value="English">English</option>
+          <option value="Hinglish">Hinglish</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Voice gender</label>
+        <select id="e-voice"><option value="FEMALE">Female</option><option value="MALE">Male</option></select>
+      </div>
+      <div class="form-group"><label>Videos per day</label>
+        <select id="e-vpd"><option value="1">1/day</option><option value="2">2/day</option><option value="3">3/day</option></select>
+      </div>
+      <div class="form-group"><label>Status</label>
+        <select id="e-status"><option value="true">Active</option><option value="false">Paused</option></select>
+      </div>
+      <div class="form-group"><label>Start date</label><input type="date" id="e-startdate"></div>
+      <div class="form-group full"><label>Sheet ID</label><input type="text" id="e-sheetid"></div>
+      <div class="form-group full"><label>Drive Folder ID</label><input type="text" id="e-folderid"></div>
+    </div>
+    <div class="form-actions" style="margin-top:1.25rem">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEdit()"><i class="ti ti-check"></i> Save changes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var clients = JSON.parse(localStorage.getItem('yt_factory_clients') || '[]');
+
+function save() {
+  localStorage.setItem('yt_factory_clients', JSON.stringify(clients));
+  updateStats();
+  renderClients();
+}
+
+function updateStats() {
+  var active = clients.filter(function(c){ return c.active === 'true' || c.active === true; });
+  var paused = clients.filter(function(c){ return c.active === 'false' || c.active === false; });
+  var totalVpd = active.reduce(function(a,c){ return a + (parseInt(c.vpd)||1); }, 0);
+  document.getElementById('stat-total').textContent = clients.length;
+  document.getElementById('stat-active').textContent = active.length;
+  document.getElementById('stat-paused').textContent = paused.length;
+  document.getElementById('stat-videos').textContent = totalVpd;
+}
+
+function renderClients() {
+  var list = document.getElementById('clients-list');
+  if (clients.length === 0) {
+    list.innerHTML = '<div class="empty-state"><i class="ti ti-users"></i><p>No clients yet</p><span>Click "Add client" to get started</span></div>';
+    return;
+  }
+  list.innerHTML = clients.map(function(c, i) {
+    var isActive = c.active === 'true' || c.active === true;
+    var id = 'client_' + String(i+1).padStart(3,'0');
+    return '<div class="client-card">' +
+      '<div class="client-header">' +
+        '<div>' +
+          '<div class="client-name">' + escHtml(c.name) + '</div>' +
+          '<div class="client-channel"><i class="ti ti-brand-youtube" style="color:#ff0000;font-size:12px"></i> ' + escHtml(c.channel) + '</div>' +
+        '</div>' +
+        '<span class="badge ' + (isActive ? 'badge-active' : 'badge-paused') + '">' + (isActive ? 'Active' : 'Paused') + '</span>' +
+      '</div>' +
+      '<div class="client-meta">' +
+        '<div class="meta-item"><div class="meta-label">Niche</div><div class="meta-value">' + escHtml(c.niche) + '</div></div>' +
+        '<div class="meta-item"><div class="meta-label">Language</div><div class="meta-value">' + escHtml(c.language) + '</div></div>' +
+        '<div class="meta-item"><div class="meta-label">Videos/day</div><div class="meta-value">' + c.vpd + '</div></div>' +
+        '<div class="meta-item"><div class="meta-label">Voice</div><div class="meta-value">' + escHtml(c.voice) + '</div></div>' +
+        '<div class="meta-item"><div class="meta-label">Start date</div><div class="meta-value">' + (c.startdate || 'Not set') + '</div></div>' +
+        '<div class="meta-item"><div class="meta-label">Client ID</div><div class="meta-value" style="font-family:monospace;font-size:11px">' + id + '</div></div>' +
+      '</div>' +
+      '<div class="client-actions">' +
+        '<button class="btn" onclick="editClient(' + i + ')"><i class="ti ti-edit"></i> Edit</button>' +
+        '<button class="btn btn-warning" onclick="toggleStatus(' + i + ')"><i class="ti ti-' + (isActive ? 'pause' : 'player-play') + '"></i> ' + (isActive ? 'Pause' : 'Resume') + '</button>' +
+        '<button class="btn btn-danger" onclick="deleteClient(' + i + ')"><i class="ti ti-trash"></i> Delete</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showTab(name) {
+  document.querySelectorAll('.section').forEach(function(s){ s.classList.remove('active'); });
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
+  document.getElementById('tab-' + name).classList.add('active');
+  var map = { clients:0, add:1, config:2, guide:3 };
+  if (map[name] !== undefined) document.querySelectorAll('.tab')[map[name]].classList.add('active');
+}
+
+function addClient() {
+  var name = document.getElementById('f-name').value.trim();
+  var channel = document.getElementById('f-channel').value.trim();
+  if (!name || !channel) {
+    document.getElementById('form-alert').innerHTML = '<div class="alert alert-error"><i class="ti ti-alert-circle"></i> Please fill in client name and channel name.</div>';
+    return;
+  }
+  clients.push({
+    name: name,
+    channel: channel,
+    niche: document.getElementById('f-niche').value,
+    language: document.getElementById('f-language').value,
+    voice: document.getElementById('f-voice').value,
+    vpd: document.getElementById('f-vpd').value,
+    startdate: document.getElementById('f-startdate').value,
+    active: document.getElementById('f-status').value,
+    sheetid: document.getElementById('f-sheetid').value.trim(),
+    folderid: document.getElementById('f-folderid').value.trim(),
+  });
+  save();
+  clearForm();
+  document.getElementById('form-alert').innerHTML = '<div class="alert alert-success"><i class="ti ti-check"></i> Client added! Go to Config tab to regenerate config.gs.</div>';
+  setTimeout(function(){ showTab('clients'); }, 1500);
+}
+
+function clearForm() {
+  ['f-name','f-channel','f-sheetid','f-folderid'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('form-alert').innerHTML = '';
+}
+
+function toggleStatus(i) {
+  var c = clients[i];
+  c.active = (c.active === 'true' || c.active === true) ? 'false' : 'true';
+  save();
+}
+
+function deleteClient(i) {
+  if (confirm('Delete client "' + clients[i].name + '"? This cannot be undone.')) {
+    clients.splice(i, 1);
+    save();
+  }
+}
+
+function editClient(i) {
+  var c = clients[i];
+  document.getElementById('edit-idx').value = i;
+  document.getElementById('e-name').value = c.name;
+  document.getElementById('e-channel').value = c.channel;
+  document.getElementById('e-niche').value = c.niche;
+  document.getElementById('e-language').value = c.language;
+  document.getElementById('e-voice').value = c.voice;
+  document.getElementById('e-vpd').value = c.vpd;
+  document.getElementById('e-status').value = String(c.active);
+  document.getElementById('e-startdate').value = c.startdate || '';
+  document.getElementById('e-sheetid').value = c.sheetid || '';
+  document.getElementById('e-folderid').value = c.folderid || '';
+  document.getElementById('edit-modal').classList.add('open');
+}
+
+function saveEdit() {
+  var i = parseInt(document.getElementById('edit-idx').value);
+  clients[i] = {
+    name: document.getElementById('e-name').value.trim(),
+    channel: document.getElementById('e-channel').value.trim(),
+    niche: document.getElementById('e-niche').value,
+    language: document.getElementById('e-language').value,
+    voice: document.getElementById('e-voice').value,
+    vpd: document.getElementById('e-vpd').value,
+    startdate: document.getElementById('e-startdate').value,
+    active: document.getElementById('e-status').value,
+    sheetid: document.getElementById('e-sheetid').value.trim(),
+    folderid: document.getElementById('e-folderid').value.trim(),
   };
+  save();
+  closeModal();
 }
 
-function fetchImages(topic, language) {
-  var keywords = topic.split(" ").slice(0, 3).join(" ");
-  var url = "https://api.pexels.com/v1/search?query=" + encodeURIComponent(keywords) + "&per_page=8&orientation=portrait";
-
-  try {
-    var response = UrlFetchApp.fetch(url, {
-      headers: { "Authorization": AGENCY.pexelsKey }
-    });
-    var data = JSON.parse(response.getContentText());
-    return data.photos.map(function(p) { return p.src.large; });
-  } catch (e) {
-    Logger.log("Pexels error: " + e.message);
-    return [
-      "https://images.pexels.com/photos/956999/milky-way-starry-sky-night-sky-star-956999.jpeg",
-      "https://images.pexels.com/photos/1252500/pexels-photo-1252500.jpeg"
-    ];
-  }
+function closeModal() {
+  document.getElementById('edit-modal').classList.remove('open');
 }
 
-function generateVoiceover(narration, client) {
-  var languageCode = client.language === "Hindi" ? "hi-IN" :
-                     client.language === "Hinglish" ? "hi-IN" : "en-US";
+function generateConfig() {
+  var gemini = document.getElementById('cfg-gemini').value.trim() || 'PASTE_YOUR_GEMINI_API_KEY';
+  var pexels = document.getElementById('cfg-pexels').value.trim() || 'PASTE_YOUR_PEXELS_API_KEY';
+  var cloudrun = document.getElementById('cfg-cloudrun').value.trim();
+  var email = document.getElementById('cfg-email').value.trim() || 'PASTE_YOUR_EMAIL';
+  var master = document.getElementById('cfg-mastersheet').value.trim() || 'PASTE_YOUR_MASTER_SHEET_ID';
 
-  var voiceName = client.language === "Hindi" ?
-    (client.voiceGender === "FEMALE" ? "hi-IN-Wavenet-A" : "hi-IN-Wavenet-B") :
-    (client.voiceGender === "FEMALE" ? "en-US-Wavenet-F" : "en-US-Wavenet-D");
+  var clientsCode = clients.map(function(c, i) {
+    var id = 'client_' + String(i+1).padStart(3,'0');
+    return '  {\n' +
+      '    id:           "' + id + '",\n' +
+      '    name:         "' + c.name + '",\n' +
+      '    channelName:  "' + c.channel + '",\n' +
+      '    niche:        "' + c.niche + '",\n' +
+      '    language:     "' + c.language + '",\n' +
+      '    voiceGender:  "' + c.voice + '",\n' +
+      '    videosPerDay: ' + c.vpd + ',\n' +
+      '    active:       ' + (c.active === 'true' || c.active === true ? 'true' : 'false') + ',\n' +
+      '    sheetId:      "' + (c.sheetid || 'PASTE_SHEET_ID') + '",\n' +
+      '    driveFolder:  "' + (c.folderid || 'PASTE_FOLDER_ID') + '",\n' +
+      '    startDate:    "' + (c.startdate || new Date().toISOString().split('T')[0]) + '",\n' +
+      '    youtubeAuth:  "' + id + '",\n' +
+      '  }';
+  }).join(',\n\n');
 
-  var ttsUrl = "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + AGENCY.geminiKey;
+  var code = '// ============================================================\n' +
+    '//   YOUTUBE SHORTS FACTORY — CONFIG FILE\n' +
+    '//   Generated: ' + new Date().toLocaleString() + '\n' +
+    '// ============================================================\n\n' +
+    'var AGENCY = {\n' +
+    '  geminiKey:     "' + gemini + '",\n' +
+    '  pexelsKey:     "' + pexels + '",\n' +
+    '  cloudRunUrl:   "' + cloudrun + '",\n' +
+    '  email:         "' + email + '",\n' +
+    '  masterSheetId: "' + master + '",\n' +
+    '};\n\n' +
+    'var CLIENTS = [\n\n' + (clientsCode || '  // No clients added yet') + '\n\n];\n\n' +
+    'var NICHE_SETTINGS = {\n\n' +
+    '  "Facts and Mysteries": {\n' +
+    '    hooks: ["Kya aap jaante hain","Duniya ka sabse bada rahasya","Ye baat aapne kabhi nahi suni hogi","Vigyan bhi nahi samjha ye rahasya","Is jagah pe aaj bhi log darte hain"],\n' +
+    '    style: "mysterious, suspenseful, curiosity-driven",\n    duration: 50,\n' +
+    '    tags: ["facts","rahasya","mystery","hindi","shorts","amazing facts","rochak tathya","viral facts"],\n  },\n\n' +
+    '  "Horror Stories": {\n' +
+    '    hooks: ["Ye kahani sunke aapki neend ud jayegi","Sach mein hua tha ye","Is ghar mein aaj bhi koi nahi rehta","Raat ko akele mat sunna"],\n' +
+    '    style: "dark, scary, suspenseful",\n    duration: 55,\n' +
+    '    tags: ["horror","bhoot","scary","hindi horror","shorts","darr","supernatural","haunted"],\n  },\n\n' +
+    '  "Motivational": {\n' +
+    '    hooks: ["Ek baat jo aapki zindagi badal degi","Safalta ka sabse bada raaz","Har successful insaan ye karta hai","Aaj se hi shuru karo ye aadat"],\n' +
+    '    style: "inspiring, energetic, actionable",\n    duration: 45,\n' +
+    '    tags: ["motivation","success","hindi motivation","shorts","inspirational","life tips","positive thinking"],\n  },\n\n' +
+    '  "Finance Tips": {\n' +
+    '    hooks: ["Paise bachane ka ye tarika koi nahi batata","Is galti se bachna zaroori hai","Investment ka sabse bada raaz","Agar ye nahi kiya toh paise kabhi nahi bachenge"],\n' +
+    '    style: "informative, practical, trustworthy",\n    duration: 50,\n' +
+    '    tags: ["finance","money","investment","hindi finance","shorts","paise","saving tips","financial tips"],\n  },\n\n' +
+    '  "Science Facts": {\n' +
+    '    hooks: ["Vigyan ne abhi tak ye explain nahi kiya","Is cheez ko dekhke scientists bhi hairan hain","Ye experiment ghar pe mat karna","Space mein hoti hai ye ajeeb cheez"],\n' +
+    '    style: "curious, educational, mind-blowing",\n    duration: 50,\n' +
+    '    tags: ["science","facts","hindi science","shorts","amazing","vigyan","space facts","earth facts"],\n  },\n\n' +
+    '};\n\n' +
+    'var SCHEDULES = {\n' +
+    '  1: [20],\n  2: [8, 20],\n  3: [8, 14, 20],\n};\n';
 
-  var payload = {
-    input: { text: narration },
-    voice: { languageCode: languageCode, name: voiceName },
-    audioConfig: { audioEncoding: "MP3", speakingRate: 1.1, pitch: 0 }
-  };
-
-  try {
-    var response = UrlFetchApp.fetch(ttsUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      payload: JSON.stringify(payload)
-    });
-    var data = JSON.parse(response.getContentText());
-    var audioBytes = Utilities.base64Decode(data.audioContent);
-    var audioBlob = Utilities.newBlob(audioBytes, "audio/mp3", "voiceover.mp3");
-    var folder = DriveApp.getFolderById(client.driveFolder);
-    var audioFile = folder.createFile(audioBlob);
-    audioFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-    return "https://drive.google.com/uc?id=" + audioFile.getId();
-  } catch (e) {
-    Logger.log("TTS error: " + e.message);
-    return null;
-  }
+  window._generatedConfig = code;
+  document.getElementById('config-output').innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:1.25rem;margin-bottom:6px">' +
+    '<div style="font-size:13px;font-weight:600;color:#1a1a1a">config.gs — ready to paste</div>' +
+    '<button class="copy-btn" onclick="copyConfig()" id="copy-config-btn" style="position:static"><i class="ti ti-copy"></i> Copy all</button>' +
+    '</div>' +
+    '<div class="code-box">' + code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>';
 }
 
-function assembleVideo(client, script, images, audioUrl) {
-  var payload = {
-    clientId:    client.id,
-    channelName: client.channelName,
-    title:       script.title,
-    images:      images,
-    audioUrl:    audioUrl,
-    narration:   script.narration,
-    language:    client.language,
-    driveFolder: client.driveFolder,
-    style:       "shorts_vertical"
-  };
-
-  try {
-    var response = UrlFetchApp.fetch(AGENCY.cloudRunUrl + "/assemble", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
-    });
-    var result = JSON.parse(response.getContentText());
-    if (result.videoUrl) return result.videoUrl;
-    throw new Error("No video URL returned: " + response.getContentText());
-  } catch (e) {
-    Logger.log("Assembly error: " + e.message);
-    throw e;
-  }
-}
-
-function uploadToYouTube(client, script, videoUrl) {
-  var nicheSettings = NICHE_SETTINGS[client.niche] || {};
-  var tags = nicheSettings.tags || ["shorts", "hindi", "viral"];
-
-  var videoResponse = UrlFetchApp.fetch(videoUrl);
-  var videoBlob = videoResponse.getBlob().setName("video.mp4");
-
-  var resource = {
-    snippet: {
-      title:           script.title,
-      description:     script.description,
-      tags:            tags,
-      categoryId:      "22",
-      defaultLanguage: client.language === "Hindi" ? "hi" : "en"
-    },
-    status: {
-      privacyStatus:           "public",
-      selfDeclaredMadeForKids: false
-    }
-  };
-
-  var uploaded = YouTube.Videos.insert(resource, "snippet,status", videoBlob);
-  return uploaded.id;
-}
-
-function setupMasterSheet() {
-  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
-  var sheet = ss.getSheetByName("Clients") || ss.insertSheet("Clients");
-  sheet.getRange(1, 1, 1, 8).setValues([[
-    "Client ID", "Name", "Channel", "Niche", "Language", "Status", "Total Videos", "Last Upload"
-  ]]);
-  sheet.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#4a90d9").setFontColor("white");
-  sheet.setFrozenRows(1);
-  Logger.log("Master sheet ready.");
-}
-
-function setupClientSheet(client) {
-  var ss = SpreadsheetApp.openById(client.sheetId);
-  var sheet = ss.getSheetByName("Videos") || ss.insertSheet("Videos");
-  sheet.getRange(1, 1, 1, 6).setValues([[
-    "Date", "Topic", "Title", "Video ID", "YouTube URL", "Status"
-  ]]);
-  sheet.getRange(1, 1, 1, 6).setFontWeight("bold").setBackground("#34a853").setFontColor("white");
-  sheet.setFrozenRows(1);
-  Logger.log("Client sheet ready for: " + client.name);
-}
-
-function logToClientSheet(client, topic, title, videoId) {
-  var ss = SpreadsheetApp.openById(client.sheetId);
-  var sheet = ss.getSheetByName("Videos");
-  var date = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm");
-  var ytUrl = "https://www.youtube.com/shorts/" + videoId;
-  sheet.appendRow([date, topic, title, videoId, ytUrl, "UPLOADED"]);
-  updateMasterSheetCount(client);
-}
-
-function updateMasterSheet(client, status) {
-  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
-  var sheet = ss.getSheetByName("Clients");
-  var data = sheet.getDataRange().getValues();
-
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][0] === client.id) {
-      sheet.getRange(i + 1, 6).setValue(status);
-      return;
-    }
-  }
-
-  sheet.appendRow([
-    client.id, client.name, client.channelName,
-    client.niche, client.language, status, 0, "Never"
-  ]);
-}
-
-function updateMasterSheetCount(client) {
-  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
-  var sheet = ss.getSheetByName("Clients");
-  var data = sheet.getDataRange().getValues();
-  var date = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm");
-
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][0] === client.id) {
-      sheet.getRange(i + 1, 7).setValue((data[i][6] || 0) + 1);
-      sheet.getRange(i + 1, 8).setValue(date);
-      return;
-    }
-  }
-}
-
-function getUsedTopics(client) {
-  try {
-    var ss = SpreadsheetApp.openById(client.sheetId);
-    var sheet = ss.getSheetByName("Videos");
-    var data = sheet.getDataRange().getValues();
-    return data.slice(1).map(function(row) { return row[1]; }).filter(Boolean);
-  } catch (e) {
-    return [];
-  }
-}
-
-function setupAllTriggers() {
-  deleteAllTriggers();
-  ScriptApp.newTrigger("runAllClients")
-    .timeBased()
-    .everyHours(1)
-    .create();
-  ScriptApp.newTrigger("checkAllClientPhases")
-    .timeBased()
-    .everyDays(1)
-    .atHour(18)
-    .nearMinute(30)
-    .create();
-  ScriptApp.newTrigger("sendWeeklyReports")
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(3)
-    .nearMinute(30)
-    .create();
-  Logger.log("All triggers set.");
-}
-
-function deleteAllTriggers() {
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    ScriptApp.deleteTrigger(t);
+function copyConfig() {
+  if (!window._generatedConfig) return;
+  navigator.clipboard.writeText(window._generatedConfig).then(function() {
+    var btn = document.getElementById('copy-config-btn');
+    btn.innerHTML = '<i class="ti ti-check"></i> Copied!';
+    btn.style.background = '#dcfce7';
+    btn.style.color = '#16a34a';
+    setTimeout(function(){
+      btn.innerHTML = '<i class="ti ti-copy"></i> Copy all';
+      btn.style.background = '';
+      btn.style.color = '';
+    }, 2000);
   });
 }
 
-function checkAllClientPhases() {
-  CLIENTS.forEach(function(client) {
-    if (!client.active) return;
-    var istNow = new Date(new Date().getTime() + 5.5 * 60 * 60 * 1000);
-    var istStart = new Date(new Date(client.startDate).getTime() + 5.5 * 60 * 60 * 1000);
-    var daysPassed = Math.floor((istNow - istStart) / (1000 * 60 * 60 * 24));
-    Logger.log(client.name + " — Day " + daysPassed);
-  });
-}
-
-function getClientSchedule(client) {
-  var istNow = new Date(new Date().getTime() + 5.5 * 60 * 60 * 1000);
-  var istStart = new Date(new Date(client.startDate).getTime() + 5.5 * 60 * 60 * 1000);
-  var daysPassed = Math.floor((istNow - istStart) / (1000 * 60 * 60 * 24));
-  var videosPerDay = client.videosPerDay;
-  if (daysPassed >= 28) videosPerDay = 1;
-  else if (daysPassed >= 14) videosPerDay = Math.min(client.videosPerDay, 2);
-  return SCHEDULES[videosPerDay] || SCHEDULES[1];
-}
-
-function sendWeeklyReports() {
-  var report = "WEEKLY YOUTUBE FACTORY REPORT\n\n";
-  CLIENTS.forEach(function(client) {
-    if (!client.active) return;
-    try {
-      var ss = SpreadsheetApp.openById(client.sheetId);
-      var sheet = ss.getSheetByName("Videos");
-      var total = sheet.getLastRow() - 1;
-      report += client.name + " (" + client.channelName + ") — Videos: " + total + "\n";
-    } catch (e) {
-      report += client.name + " — Error\n";
-    }
-  });
-  MailApp.sendEmail(AGENCY.email, "YouTube Factory Weekly Report", report);
-  Logger.log("Weekly report sent.");
-}
-
-function sendErrorAlert(client, error) {
-  MailApp.sendEmail(
-    AGENCY.email,
-    "YT Factory Error — " + client.name,
-    "Client: " + client.name + "\nChannel: " + client.channelName + "\nError: " + error
-  );
-}
-
-function callGemini(prompt, maxTokens) {
-  var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + AGENCY.geminiKey;
-  var response = UrlFetchApp.fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    payload: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.9, maxOutputTokens: maxTokens }
-    }),
-    muteHttpExceptions: true
-  });
-  var data = JSON.parse(response.getContentText());
-  return data.candidates[0].content.parts[0].text.trim();
-}
-
-function getClientById(id) {
-  return CLIENTS.filter(function(c) { return c.id === id; })[0] || null;
-}
-
-function testFirstClient() {
-  var client = CLIENTS[0];
-  Logger.log("Testing client: " + client.name);
-  processClient(client);
-}
-
-function testTopicOnly() {
-  var client = CLIENTS[0];
-  var topic = generateTopic(client);
-  Logger.log("Generated topic: " + topic);
-}
-
-function testScriptOnly() {
-  var client = CLIENTS[0];
-  var topic = generateTopic(client);
-  var script = generateScript(client, topic);
-  Logger.log("Title: " + script.title);
-  Logger.log("Narration: " + script.narration);
-}
-
-function checkAllStats() {
-  Logger.log("===== ALL CLIENT STATS =====");
-  CLIENTS.forEach(function(client) {
-    try {
-      var ss = SpreadsheetApp.openById(client.sheetId);
-      var sheet = ss.getSheetByName("Videos");
-      var total = Math.max(0, sheet.getLastRow() - 1);
-      Logger.log(client.name + " | " + client.channelName + " | Videos: " + total + " | " + (client.active ? "ACTIVE" : "PAUSED"));
-    } catch (e) {
-      Logger.log(client.name + " | ERROR: " + e.message);
-    }
-  });
-  Logger.log("============================");
-}
+document.getElementById('f-startdate').value = new Date().toISOString().split('T')[0];
+updateStats();
+renderClients();
+</script>
+</body>
+</html>
