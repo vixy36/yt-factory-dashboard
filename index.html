@@ -1,1 +1,456 @@
+// ============================================================
+//   YOUTUBE SHORTS FACTORY — MAIN ENGINE
+//   Handles all clients automatically
+// ============================================================
 
+
+function masterSetup() {
+  Logger.log("Setting up YouTube Shorts Factory...");
+  setupMasterSheet();
+  setupAllTriggers();
+  Logger.log("Setup complete! System is live.");
+}
+
+function addNewClient() {
+  var client = CLIENTS[CLIENTS.length - 1];
+  Logger.log("Adding client: " + client.name);
+  setupClientSheet(client);
+  updateMasterSheet(client, "ACTIVE");
+  Logger.log("Client " + client.name + " is ready!");
+}
+
+function pauseClient(clientId) {
+  var client = getClientById(clientId);
+  if (!client) { Logger.log("Client not found: " + clientId); return; }
+  updateMasterSheet(client, "PAUSED");
+  Logger.log("Paused: " + client.name);
+}
+
+function resumeClient(clientId) {
+  var client = getClientById(clientId);
+  if (!client) { Logger.log("Client not found: " + clientId); return; }
+  updateMasterSheet(client, "ACTIVE");
+  Logger.log("Resumed: " + client.name);
+}
+
+function runAllClients() {
+  Logger.log("Daily run started...");
+  var now = new Date();
+  var utcHour = now.getUTCHours();
+
+  CLIENTS.forEach(function(client) {
+    if (!client.active) {
+      Logger.log("Skipping paused client: " + client.name);
+      return;
+    }
+    var schedule = getClientSchedule(client);
+    if (schedule.indexOf(utcHour) === -1) {
+      Logger.log("Not upload time for: " + client.name);
+      return;
+    }
+    Logger.log("Processing client: " + client.name);
+    try {
+      processClient(client);
+    } catch (e) {
+      Logger.log("Error for " + client.name + ": " + e.message);
+      sendErrorAlert(client, e.message);
+    }
+  });
+
+  Logger.log("Daily run complete.");
+}
+
+function processClient(client) {
+  Logger.log("Processing: " + client.name + " | " + client.niche + " | " + client.language);
+
+  var topic = generateTopic(client);
+  Logger.log("Topic: " + topic);
+
+  var script = generateScript(client, topic);
+  Logger.log("Script generated: " + script.title);
+
+  var images = fetchImages(topic, client.language);
+  Logger.log("Images found: " + images.length);
+
+  var audioUrl = generateVoiceover(script.narration, client);
+  Logger.log("Voiceover generated.");
+
+  var videoUrl = assembleVideo(client, script, images, audioUrl);
+  Logger.log("Video assembled: " + videoUrl);
+
+  var videoId = uploadToYouTube(client, script, videoUrl);
+  Logger.log("Uploaded! Video ID: " + videoId);
+
+  logToClientSheet(client, topic, script.title, videoId);
+  Logger.log("Done for " + client.name);
+}
+
+function generateTopic(client) {
+  var usedTopics = getUsedTopics(client);
+  var nicheSettings = NICHE_SETTINGS[client.niche] || NICHE_SETTINGS["Facts and Mysteries"];
+
+  var prompt = "You are a YouTube Shorts content strategist.\n\n" +
+    "Generate ONE fresh, trending, engaging topic for a " + client.niche + " channel in " + client.language + ".\n\n" +
+    "Rules:\n" +
+    "- Must be specific, not vague\n" +
+    "- Must be suitable for a 50-second short video\n" +
+    "- Must be genuinely interesting and shareable\n" +
+    "- MUST NOT be any of these already used topics: " + usedTopics.join(", ") + "\n\n" +
+    "Respond with ONLY the topic in one line, no explanation.";
+
+  return callGemini(prompt, 100);
+}
+
+function generateScript(client, topic) {
+  var nicheSettings = NICHE_SETTINGS[client.niche] || NICHE_SETTINGS["Facts and Mysteries"];
+  var hook = nicheSettings.hooks[Math.floor(Math.random() * nicheSettings.hooks.length)];
+  var duration = nicheSettings.duration;
+
+  var prompt = "You are an expert YouTube Shorts scriptwriter.\n\n" +
+    "Write a complete script for a " + duration + "-second " + client.language + " YouTube Short.\n\n" +
+    "Topic: " + topic + "\n" +
+    "Channel: " + client.channelName + "\n" +
+    "Style: " + nicheSettings.style + "\n" +
+    "Hook to use: " + hook + "\n\n" +
+    "Script structure:\n" +
+    "1. HOOK (0-3 seconds): Start with hook phrase, make it irresistible\n" +
+    "2. STORY (3-45 seconds): Build tension, share facts, keep viewer hooked\n" +
+    "3. TWIST (45-50 seconds): Surprising ending or mind-blowing conclusion\n" +
+    "4. CTA (last 3 seconds): Follow karo aur aisi aur videos ke liye\n\n" +
+    "Rules:\n" +
+    "- Write ONLY in " + client.language + "\n" +
+    "- Short sentences, high energy\n" +
+    "- No filler words\n" +
+    "- Must keep viewer watching till end\n\n" +
+    "Respond in JSON only, no markdown:\n" +
+    "{\"title\": \"catchy youtube title under 60 chars with 1 emoji\", " +
+    "\"description\": \"2 sentence description + hashtags\", " +
+    "\"narration\": \"complete script text for voiceover\", " +
+    "\"imageKeywords\": [\"keyword1\", \"keyword2\", \"keyword3\", \"keyword4\", \"keyword5\"]}";
+
+  var response = callGemini(prompt, 1500);
+
+  try {
+    var cleaned = response.replace(/```json/gi, "").replace(/```/g, "").trim();
+    var jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    Logger.log("Script parse error: " + e.message);
+  }
+
+  return {
+    title: topic + " 😱",
+    description: "Jaaniye is amazing topic ke baare mein! #Shorts #Hindi #Facts",
+    narration: topic + " ke baare mein aaj hum jaanenge kuch aisa jo aapne kabhi nahi suna.",
+    imageKeywords: ["mystery", "india", "facts", "amazing", "world"]
+  };
+}
+
+function fetchImages(topic, language) {
+  var keywords = topic.split(" ").slice(0, 3).join(" ");
+  var url = "https://api.pexels.com/v1/search?query=" + encodeURIComponent(keywords) + "&per_page=8&orientation=portrait";
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      headers: { "Authorization": AGENCY.pexelsKey }
+    });
+    var data = JSON.parse(response.getContentText());
+    return data.photos.map(function(p) { return p.src.large; });
+  } catch (e) {
+    Logger.log("Pexels error: " + e.message);
+    return [
+      "https://images.pexels.com/photos/956999/milky-way-starry-sky-night-sky-star-956999.jpeg",
+      "https://images.pexels.com/photos/1252500/pexels-photo-1252500.jpeg"
+    ];
+  }
+}
+
+function generateVoiceover(narration, client) {
+  var languageCode = client.language === "Hindi" ? "hi-IN" :
+                     client.language === "Hinglish" ? "hi-IN" : "en-US";
+
+  var voiceName = client.language === "Hindi" ?
+    (client.voiceGender === "FEMALE" ? "hi-IN-Wavenet-A" : "hi-IN-Wavenet-B") :
+    (client.voiceGender === "FEMALE" ? "en-US-Wavenet-F" : "en-US-Wavenet-D");
+
+  var ttsUrl = "https://texttospeech.googleapis.com/v1/text:synthesize?key=" + AGENCY.geminiKey;
+
+  var payload = {
+    input: { text: narration },
+    voice: { languageCode: languageCode, name: voiceName },
+    audioConfig: { audioEncoding: "MP3", speakingRate: 1.1, pitch: 0 }
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(ttsUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      payload: JSON.stringify(payload)
+    });
+    var data = JSON.parse(response.getContentText());
+    var audioBytes = Utilities.base64Decode(data.audioContent);
+    var audioBlob = Utilities.newBlob(audioBytes, "audio/mp3", "voiceover.mp3");
+    var folder = DriveApp.getFolderById(client.driveFolder);
+    var audioFile = folder.createFile(audioBlob);
+    audioFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return "https://drive.google.com/uc?id=" + audioFile.getId();
+  } catch (e) {
+    Logger.log("TTS error: " + e.message);
+    return null;
+  }
+}
+
+function assembleVideo(client, script, images, audioUrl) {
+  var payload = {
+    clientId:    client.id,
+    channelName: client.channelName,
+    title:       script.title,
+    images:      images,
+    audioUrl:    audioUrl,
+    narration:   script.narration,
+    language:    client.language,
+    driveFolder: client.driveFolder,
+    style:       "shorts_vertical"
+  };
+
+  try {
+    var response = UrlFetchApp.fetch(AGENCY.cloudRunUrl + "/assemble", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    var result = JSON.parse(response.getContentText());
+    if (result.videoUrl) return result.videoUrl;
+    throw new Error("No video URL returned: " + response.getContentText());
+  } catch (e) {
+    Logger.log("Assembly error: " + e.message);
+    throw e;
+  }
+}
+
+function uploadToYouTube(client, script, videoUrl) {
+  var nicheSettings = NICHE_SETTINGS[client.niche] || {};
+  var tags = nicheSettings.tags || ["shorts", "hindi", "viral"];
+
+  var videoResponse = UrlFetchApp.fetch(videoUrl);
+  var videoBlob = videoResponse.getBlob().setName("video.mp4");
+
+  var resource = {
+    snippet: {
+      title:           script.title,
+      description:     script.description,
+      tags:            tags,
+      categoryId:      "22",
+      defaultLanguage: client.language === "Hindi" ? "hi" : "en"
+    },
+    status: {
+      privacyStatus:           "public",
+      selfDeclaredMadeForKids: false
+    }
+  };
+
+  var uploaded = YouTube.Videos.insert(resource, "snippet,status", videoBlob);
+  return uploaded.id;
+}
+
+function setupMasterSheet() {
+  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
+  var sheet = ss.getSheetByName("Clients") || ss.insertSheet("Clients");
+  sheet.getRange(1, 1, 1, 8).setValues([[
+    "Client ID", "Name", "Channel", "Niche", "Language", "Status", "Total Videos", "Last Upload"
+  ]]);
+  sheet.getRange(1, 1, 1, 8).setFontWeight("bold").setBackground("#4a90d9").setFontColor("white");
+  sheet.setFrozenRows(1);
+  Logger.log("Master sheet ready.");
+}
+
+function setupClientSheet(client) {
+  var ss = SpreadsheetApp.openById(client.sheetId);
+  var sheet = ss.getSheetByName("Videos") || ss.insertSheet("Videos");
+  sheet.getRange(1, 1, 1, 6).setValues([[
+    "Date", "Topic", "Title", "Video ID", "YouTube URL", "Status"
+  ]]);
+  sheet.getRange(1, 1, 1, 6).setFontWeight("bold").setBackground("#34a853").setFontColor("white");
+  sheet.setFrozenRows(1);
+  Logger.log("Client sheet ready for: " + client.name);
+}
+
+function logToClientSheet(client, topic, title, videoId) {
+  var ss = SpreadsheetApp.openById(client.sheetId);
+  var sheet = ss.getSheetByName("Videos");
+  var date = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm");
+  var ytUrl = "https://www.youtube.com/shorts/" + videoId;
+  sheet.appendRow([date, topic, title, videoId, ytUrl, "UPLOADED"]);
+  updateMasterSheetCount(client);
+}
+
+function updateMasterSheet(client, status) {
+  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
+  var sheet = ss.getSheetByName("Clients");
+  var data = sheet.getDataRange().getValues();
+
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] === client.id) {
+      sheet.getRange(i + 1, 6).setValue(status);
+      return;
+    }
+  }
+
+  sheet.appendRow([
+    client.id, client.name, client.channelName,
+    client.niche, client.language, status, 0, "Never"
+  ]);
+}
+
+function updateMasterSheetCount(client) {
+  var ss = SpreadsheetApp.openById(AGENCY.masterSheetId);
+  var sheet = ss.getSheetByName("Clients");
+  var data = sheet.getDataRange().getValues();
+  var date = Utilities.formatDate(new Date(), "Asia/Kolkata", "dd-MM-yyyy HH:mm");
+
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][0] === client.id) {
+      sheet.getRange(i + 1, 7).setValue((data[i][6] || 0) + 1);
+      sheet.getRange(i + 1, 8).setValue(date);
+      return;
+    }
+  }
+}
+
+function getUsedTopics(client) {
+  try {
+    var ss = SpreadsheetApp.openById(client.sheetId);
+    var sheet = ss.getSheetByName("Videos");
+    var data = sheet.getDataRange().getValues();
+    return data.slice(1).map(function(row) { return row[1]; }).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
+function setupAllTriggers() {
+  deleteAllTriggers();
+  ScriptApp.newTrigger("runAllClients")
+    .timeBased()
+    .everyHours(1)
+    .create();
+  ScriptApp.newTrigger("checkAllClientPhases")
+    .timeBased()
+    .everyDays(1)
+    .atHour(18)
+    .nearMinute(30)
+    .create();
+  ScriptApp.newTrigger("sendWeeklyReports")
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(3)
+    .nearMinute(30)
+    .create();
+  Logger.log("All triggers set.");
+}
+
+function deleteAllTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    ScriptApp.deleteTrigger(t);
+  });
+}
+
+function checkAllClientPhases() {
+  CLIENTS.forEach(function(client) {
+    if (!client.active) return;
+    var istNow = new Date(new Date().getTime() + 5.5 * 60 * 60 * 1000);
+    var istStart = new Date(new Date(client.startDate).getTime() + 5.5 * 60 * 60 * 1000);
+    var daysPassed = Math.floor((istNow - istStart) / (1000 * 60 * 60 * 24));
+    Logger.log(client.name + " — Day " + daysPassed);
+  });
+}
+
+function getClientSchedule(client) {
+  var istNow = new Date(new Date().getTime() + 5.5 * 60 * 60 * 1000);
+  var istStart = new Date(new Date(client.startDate).getTime() + 5.5 * 60 * 60 * 1000);
+  var daysPassed = Math.floor((istNow - istStart) / (1000 * 60 * 60 * 24));
+  var videosPerDay = client.videosPerDay;
+  if (daysPassed >= 28) videosPerDay = 1;
+  else if (daysPassed >= 14) videosPerDay = Math.min(client.videosPerDay, 2);
+  return SCHEDULES[videosPerDay] || SCHEDULES[1];
+}
+
+function sendWeeklyReports() {
+  var report = "WEEKLY YOUTUBE FACTORY REPORT\n\n";
+  CLIENTS.forEach(function(client) {
+    if (!client.active) return;
+    try {
+      var ss = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName("Videos");
+      var total = sheet.getLastRow() - 1;
+      report += client.name + " (" + client.channelName + ") — Videos: " + total + "\n";
+    } catch (e) {
+      report += client.name + " — Error\n";
+    }
+  });
+  MailApp.sendEmail(AGENCY.email, "YouTube Factory Weekly Report", report);
+  Logger.log("Weekly report sent.");
+}
+
+function sendErrorAlert(client, error) {
+  MailApp.sendEmail(
+    AGENCY.email,
+    "YT Factory Error — " + client.name,
+    "Client: " + client.name + "\nChannel: " + client.channelName + "\nError: " + error
+  );
+}
+
+function callGemini(prompt, maxTokens) {
+  var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + AGENCY.geminiKey;
+  var response = UrlFetchApp.fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    payload: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.9, maxOutputTokens: maxTokens }
+    }),
+    muteHttpExceptions: true
+  });
+  var data = JSON.parse(response.getContentText());
+  return data.candidates[0].content.parts[0].text.trim();
+}
+
+function getClientById(id) {
+  return CLIENTS.filter(function(c) { return c.id === id; })[0] || null;
+}
+
+function testFirstClient() {
+  var client = CLIENTS[0];
+  Logger.log("Testing client: " + client.name);
+  processClient(client);
+}
+
+function testTopicOnly() {
+  var client = CLIENTS[0];
+  var topic = generateTopic(client);
+  Logger.log("Generated topic: " + topic);
+}
+
+function testScriptOnly() {
+  var client = CLIENTS[0];
+  var topic = generateTopic(client);
+  var script = generateScript(client, topic);
+  Logger.log("Title: " + script.title);
+  Logger.log("Narration: " + script.narration);
+}
+
+function checkAllStats() {
+  Logger.log("===== ALL CLIENT STATS =====");
+  CLIENTS.forEach(function(client) {
+    try {
+      var ss = SpreadsheetApp.openById(client.sheetId);
+      var sheet = ss.getSheetByName("Videos");
+      var total = Math.max(0, sheet.getLastRow() - 1);
+      Logger.log(client.name + " | " + client.channelName + " | Videos: " + total + " | " + (client.active ? "ACTIVE" : "PAUSED"));
+    } catch (e) {
+      Logger.log(client.name + " | ERROR: " + e.message);
+    }
+  });
+  Logger.log("============================");
+}
